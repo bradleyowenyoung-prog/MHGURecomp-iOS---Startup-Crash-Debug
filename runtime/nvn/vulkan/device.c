@@ -562,6 +562,7 @@ uint64_t vk_frame_counter(void) { return g_frames; }
 
 // The MHGU_SHOT_AT list: is this frame one of them?
 static bool shot_frame(uint64_t f) {
+    if (f == 300 || f == 1800) return true;  // (debug: automatic screenshots to Documents/shots, black-screen hunt)
     static const char *list = (const char *)1;
     if (list == (const char *)1) list = getenv("MHGU_SHOT_AT");
     for (const char *p = list; p && *p;) {
