@@ -99,6 +99,18 @@ static void create_instance(void) {
         }
     }
     if (has_portability_enum) ext[n_ext++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+    bool has_layer_settings = false;  // (MoltenVK settings passed at instance creation: environment variables set
+                                      // here come too late, MoltenVK reads its configuration earlier)
+    {
+        uint32_t na = 0;
+        if (vkEnumerateInstanceExtensionProperties(NULL, &na, NULL) == VK_SUCCESS && na > 0) {
+            VkExtensionProperties *av = calloc(na, sizeof *av);
+            if (av && vkEnumerateInstanceExtensionProperties(NULL, &na, av) == VK_SUCCESS)
+                has_layer_settings = has_ext(av, na, VK_EXT_LAYER_SETTINGS_EXTENSION_NAME);
+            free(av);
+        }
+    }
+    if (has_layer_settings && n_ext < 16) ext[n_ext++] = VK_EXT_LAYER_SETTINGS_EXTENSION_NAME;
 #endif
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
     VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO, .pApplicationName = "MHGURecomp",
@@ -108,6 +120,13 @@ static void create_instance(void) {
                                .enabledLayerCount = validate ? 1 : 0, .ppEnabledLayerNames = layers};
 #ifdef __APPLE__
     if (has_portability_enum) ci.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    // (iPhone black-screen hunt) sampled reads of rendered images come back black on A16: no Metal argument buffers
+    static const int32_t mvk_arg_buffers = 0;
+    static const VkLayerSettingEXT mvk_settings[] = {
+        {"MoltenVK", "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", VK_LAYER_SETTING_TYPE_INT32_EXT, 1, &mvk_arg_buffers}};
+    VkLayerSettingsCreateInfoEXT lsci = {.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT, .settingCount = 1,
+                                         .pSettings = mvk_settings};
+    if (has_layer_settings) { ci.pNext = &lsci; LOG("[vk] MoltenVK: Metal argument buffers off (layer settings)\n"); }
 #endif
     LOG("[vk] creating instance with %u extensions (flags=0x%x):\n", n_ext, ci.flags);
     for (uint32_t i = 0; i < n_ext; i++) LOG("[vk]   ext[%u]: %s\n", i, ext[i]);
