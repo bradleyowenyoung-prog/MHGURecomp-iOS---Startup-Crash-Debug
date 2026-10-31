@@ -380,7 +380,7 @@ static void create_swapchain(void) {
     VkSwapchainCreateInfoKHR ci = {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR, .surface = g_vk.surface, .minImageCount = count,
         .imageFormat = sf.format, .imageColorSpace = sf.colorSpace, .imageExtent = ext, .imageArrayLayers = 1,
-        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = caps.currentTransform,
         .compositeAlpha = composite, .presentMode = present_mode(), .clipped = VK_TRUE,
         .oldSwapchain = old};
@@ -499,11 +499,37 @@ static void *shot_thread(void *arg) {
     return NULL;
 }
 
+// (iOS workaround) the game image blitted over the window image after the render pass: on iPhone the sampled
+// present draw (exec.c vk_present_draw) comes out black although the game image has content.
+uint32_t nvn_window_origin(void);
+static struct { VkImage img; int32_t w, h; int32_t x0, y0, x1, y1; } blit_src;
+
 // End the window image's render pass and present it. shot_path: also save the window image as PNG.
 static void frame_end(const char *shot_path) {
     if (!cur_frame.ok) return;
     VkCommandBuffer cb = vk_cmd();
     vkCmdEndRenderPass(cb);
+    if (blit_src.img) {
+        static bool logged;
+        if (!logged) { logged = true; LOG("[vk] presenting by blit (%dx%d -> %d,%d..%d,%d)\n", blit_src.w, blit_src.h, blit_src.x0, blit_src.y0, blit_src.x1, blit_src.y1); }
+        VkImageMemoryBarrier bb = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                                   .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                                   .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                   .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .image = g_vk.sc_images[cur_frame.image],
+                                   .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &bb);
+        VkImageBlit bl = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .srcOffsets = {{0, 0, 0}, {blit_src.w, blit_src.h, 1}},
+                          .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                          .dstOffsets = {{blit_src.x0, blit_src.y0, 0}, {blit_src.x1, blit_src.y1, 1}}};
+        vkCmdBlitImage(cb, blit_src.img, VK_IMAGE_LAYOUT_GENERAL, g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       1, &bl, VK_FILTER_LINEAR);
+        bb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        bb.dstAccessMask = 0;
+        bb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        bb.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, &bb);
+        blit_src.img = VK_NULL_HANDLE;
+    }
     VkSpan shot = {0};
     uint32_t img = cur_frame.image;
     if (shot_path) {  // PRESENT_SRC -> TRANSFER_SRC, copy, back
@@ -612,6 +638,13 @@ void backend_present(NvnTexture *t) {
             vh = t->height * s;
         }
         vk_present_draw(vk_cmd(), b, (float)((ww - vw) / 2), (float)((wh - vh) / 2), (float)vw, (float)vh);
+        if (b && b->image && b->samples <= 1 && b->aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
+            blit_src.img = b->image;
+            blit_src.w = (int32_t)b->width, blit_src.h = (int32_t)b->height;
+            blit_src.x0 = (int32_t)((ww - vw) / 2), blit_src.y0 = (int32_t)((wh - vh) / 2);
+            blit_src.x1 = blit_src.x0 + (int32_t)vw, blit_src.y1 = blit_src.y0 + (int32_t)vh;
+            if (nvn_window_origin() == 0) { int32_t t = blit_src.y0; blit_src.y0 = blit_src.y1; blit_src.y1 = t; }  // (lower-left origin: flipped)
+        }
         OverlayTarget ot = {g_vk.inst, g_vk.phys, g_vk.dev, g_vk.qfam, g_vk.queue, g_vk.pcache, sc_pass,
                             g_vk.sc_extent.width, g_vk.sc_extent.height};
         overlay_draw(vk_cmd(), &ot);  // (Forge plugins' ImGui overlay, over the game: runtime/overlay.cpp)
