@@ -469,7 +469,7 @@ static bool frame_begin(void) {
     slot_seq[slot] = vk_pending_seq();
     VkCommandBuffer cb = vk_cmd();
     vk_full_barrier(cb);  // (the game's image is complete before it is sampled)
-    VkClearValue black = {.color.float32 = {0, 0, 0, 1}};
+    VkClearValue black = {.color.float32 = {0.6f, 0, 0, 1}};  // (debug: red bars, black-screen hunt)
     VkRenderPassBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = sc_pass,
                                 .framebuffer = sc_fb[cur_frame.image], .renderArea = {{0, 0}, g_vk.sc_extent},
                                 .clearValueCount = 1, .pClearValues = &black};
