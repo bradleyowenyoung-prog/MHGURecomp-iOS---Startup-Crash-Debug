@@ -66,6 +66,8 @@ static void disable_overwolf_layers(void) {
     // Disable Metal residency sets in MoltenVK to ensure rock-solid stability on iOS 18 / Apple Silicon M2
     if (!getenv("MVK_CONFIG_RESIDENCY_SETS")) SDL_setenv_unsafe("MVK_CONFIG_RESIDENCY_SETS", "0", 0);
     if (!getenv("MVK_CONFIG_USE_MTLRESIDENCYSETS")) SDL_setenv_unsafe("MVK_CONFIG_USE_MTLRESIDENCYSETS", "0", 0);
+    // (iPhone black-screen hunt) sampled reads of rendered images come back black on A16; try without Metal argument buffers
+    if (!getenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS")) SDL_setenv_unsafe("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "0", 0);
 #endif
 }
 
