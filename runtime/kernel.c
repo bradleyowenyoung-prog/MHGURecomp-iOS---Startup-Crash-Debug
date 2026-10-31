@@ -575,6 +575,21 @@ void kernel_log_guest_stack(const char *tag, const Cpu *c) {
     LOG("%s: lr %x (%s+%x), callers:%s\n", tag, c->r[14], s ? s : "?", off, line);
 }
 
+
+// Debug: the game's fatal-error routine formats its message into a stack buffer before exit(1);
+// log any readable text left on the guest stack above sp so the reason shows in log.txt.
+static void log_stack_strings(const Cpu *c) {
+    uint32_t sp = c->r[13];
+    char buf[256];
+    int n = 0, shown = 0;
+    for (uint32_t a = sp; a < sp + 0x3000u && shown < 24; a++) {
+        unsigned char ch = LD8(a);
+        if (ch >= 0x20 && ch < 0x7f && n < (int)sizeof buf - 1) { buf[n++] = (char)ch; continue; }
+        if ((ch == 0 || ch == '\n') && n >= 8) { buf[n] = 0; LOG("[exit-msg] sp+%x: %s\n", a - n - sp, buf); shown++; }
+        n = 0;
+    }
+}
+
 static int trace_svc = -1;
 static void svc_impl(Cpu *c, uint32_t imm, uint32_t pc);
 
@@ -628,7 +643,7 @@ static void svc_impl(Cpu *c, uint32_t imm, uint32_t pc) {
         r[0] = R_OK_;
         r[1] = 0;
         break;
-    case 0x07: kernel_log_guest_stack("ExitProcess", c); LOG("ExitProcess\n"); exit(0);
+    case 0x07: kernel_log_guest_stack("ExitProcess", c); log_stack_strings(c); LOG("ExitProcess\n"); exit(0);
     case 0x08: {  // CreateThread(prio r0, entry r1, arg r2, stack_top r3, core r4) -> r1 handle
         KThread *t = thread_new(r[1], r[2], r[3], (int)r[0], (int)r[4]);
         t->handle = kernel_new_handle(&t->obj);
