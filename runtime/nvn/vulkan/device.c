@@ -562,7 +562,7 @@ uint64_t vk_frame_counter(void) { return g_frames; }
 
 // The MHGU_SHOT_AT list: is this frame one of them?
 static bool shot_frame(uint64_t f) {
-    if (f == 300 || f == 1800) return true;  // (debug: automatic screenshots to Documents/shots, black-screen hunt)
+    if (f == 300 || f == 900 || f == 1800) return true;  // (debug: automatic screenshots to Documents/shots, black-screen hunt)
     static const char *list = (const char *)1;
     if (list == (const char *)1) list = getenv("MHGU_SHOT_AT");
     for (const char *p = list; p && *p;) {
@@ -580,6 +580,25 @@ void backend_present(NvnTexture *t) {
     b->presented = true;
     vk_end_pass();
     vk_ms_resolve(b);
+    // (debug, black-screen hunt) on screenshot frames also save the game's own image, before it is drawn to the window
+    VkSpan gshot = {0};
+    bool gshot_on = false, gshot_bgr = false;
+    if (shot_frame(g_frames + 1) && b && b->image) {
+        LOG("[vk] game image: format %d, %ux%u, samples %u, aspect %x, ms %p\n", (int)b->format, b->width, b->height,
+            b->samples, (unsigned)b->aspect, (void *)b->ms);
+        bool rgba = b->format == VK_FORMAT_R8G8B8A8_UNORM || b->format == VK_FORMAT_R8G8B8A8_SRGB;
+        gshot_bgr = b->format == VK_FORMAT_B8G8R8A8_UNORM || b->format == VK_FORMAT_B8G8R8A8_SRGB;
+        if ((rgba || gshot_bgr) && b->samples <= 1 && b->aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
+            VkCommandBuffer cb = vk_cmd();
+            vk_full_barrier(cb);
+            gshot = vk_readback((uint64_t)b->width * b->height * 4);
+            VkBufferImageCopy rg = {.bufferOffset = gshot.off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                    .imageExtent = {b->width, b->height, 1}};
+            vkCmdCopyImageToBuffer(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, gshot.buf, 1, &rg);
+            vk_full_barrier(cb);
+            gshot_on = true;
+        }
+    }
     if (frame_begin()) {
         // the game's image, as large as fits with its aspect ratio, centred (or stretched to fill screen)
         double ww = g_vk.sc_extent.width, wh = g_vk.sc_extent.height;
@@ -611,6 +630,24 @@ void backend_present(NvnTexture *t) {
             else snprintf(path, sizeof path, "shots/frame_%05llu.png", (unsigned long long)(g_frames + 1));
         }
         frame_end(shot ? path : NULL);
+        if (gshot_on && shot) {  // (frame_end waited for the submission, so the copy is done)
+            uint64_t n = (uint64_t)b->width * b->height;
+            uint8_t *px = malloc(n * 4);
+            if (px) {
+                memcpy(px, gshot.ptr, n * 4);
+                uint64_t nonzero = 0;
+                for (uint64_t i = 0; i < n; i++) {
+                    if (gshot_bgr) { uint8_t t = px[i * 4]; px[i * 4] = px[i * 4 + 2]; px[i * 4 + 2] = t; }
+                    if (px[i * 4] | px[i * 4 + 1] | px[i * 4 + 2]) nonzero++;
+                    px[i * 4 + 3] = 255;
+                }
+                LOG("[vk] game image: %llu of %llu pixels not black\n", (unsigned long long)nonzero, (unsigned long long)n);
+                char gp[300];
+                snprintf(gp, sizeof gp, "shots/game_%05llu.png", (unsigned long long)(g_frames + 1));
+                vk_save_png(gp, px, b->width, b->height);
+                free(px);
+            }
+        }
     } else {
         vk_submit_extra(VK_NULL_HANDLE, VK_NULL_HANDLE);
     }
